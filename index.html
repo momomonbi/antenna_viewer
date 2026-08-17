@@ -13671,9 +13671,11 @@ function dupWhenMs(row){
   return isFinite(t) ? t : 0;
 }
 function dupSizeLabel(n){
-  if(!isFinite(n) || n <= 0) return "";
-  return (n >= 1024 * 1024) ? (Math.round(n / 1024 / 1024 * 10) / 10 + " MB")
-       : (Math.round(n / 1024) + " KB");
+  if(!isFinite(n) || n <= 0) return "0 B（空）";
+  // 「どちらを残すか」を大きさで選ぶので、丸めて同じに見えないようバイト数も添える
+  const head = (n >= 1024 * 1024) ? (Math.round(n / 1024 / 1024 * 10) / 10 + " MB")
+             : (n >= 1024) ? (Math.round(n / 1024) + " KB") : (n + " B");
+  return (n >= 1024) ? (head + "（" + n.toLocaleString() + " B）") : head;
 }
 function dupWhen(ms){
   if(!ms) return "";
@@ -13696,11 +13698,25 @@ function dupFindGroups(rows){
   });
   const groups = [];
   by.forEach(g => {
-    if(g.items.length < 2) return;
-    // 新しい順：中の editedAt → ファイルの更新日時 → 大きい方（写真が多い）
-    g.items.sort((a, b) => (dupWhenMs(b) - dupWhenMs(a))
-      || ((b.lastModified || 0) - (a.lastModified || 0))
-      || ((b._size || 0) - (a._size || 0)));
+    // 読めるファイルが1つでも、名前が「管理番号.json」でなければ付け直す対象にする。
+    // Android は保存のたびに「管理番号_長い数字.json」を勝手に作るので、
+    // 読めるファイルが1つしか残らない戸別（他は0KB）が普通に起きる。
+    // 2つ以上でないと整理しない作りだと、その名前がいつまでも残ってしまう。
+    if(g.items.length < 2 && g.items[0]._name === (g.no + ".json")) return;
+    // 残す既定の決め方。いちばん失いたくないのは写真なので「中身の多さ」を先に見る。
+    //   ① 中身のあるもの（0バイトは選ばない）
+    //   ② 写真の枚数が多い方
+    //   ③ ファイルが大きい方
+    //   ④ 中の更新日時が新しい方 → ⑤ ファイルの更新日時が新しい方
+    // 日時を先に見ると、保存に失敗した小さいファイルの方が新しいことがあり、
+    // 写真の入った大きいファイルを消してしまう（Androidは保存のたび別ファイルを作るため
+    // 「いちばん新しい＝いちばん中身がある」とは限らない）。
+    g.items.sort((a, b) =>
+         (((b._size > 0) ? 1 : 0) - ((a._size > 0) ? 1 : 0))
+      || ((b._photoCount || 0) - (a._photoCount || 0))
+      || ((b._size || 0) - (a._size || 0))
+      || (dupWhenMs(b) - dupWhenMs(a))
+      || ((b.lastModified || 0) - (a.lastModified || 0)));
     g.canon = g.no + ".json";
     g.pick = g.items[0]._name;                               // 既定は先頭（いちばん新しい）
     groups.push(g);
@@ -13721,12 +13737,20 @@ function dupDialog(groups){
     const back = document.getElementById("dup-modal");
     const body = document.getElementById("dup-body");
     const total = groups.reduce((a, g) => a + g.items.length - 1, 0);
+    const renameOnly = groups.filter(g => g.items.length === 1).length;
     let html = '<div style="font-size:12px;margin-bottom:8px;">'
-      + '同じ管理番号のファイルが <b>' + groups.length + '</b> 組（余分な <b>' + total + '</b> ファイル）見つかりました。<br>'
+      + '整理できるところが <b>' + groups.length + '</b> 組（余分な <b>' + total + '</b> ファイル）見つかりました。<br>'
+      + (renameOnly
+          ? ('<span style="color:#1b5e20;">うち <b>' + renameOnly + '</b> 組は、ファイルが1つだけで名前が <b>管理番号_長い数字.json</b> になっているものです。'
+             + '（スマホの保存でこの名前になります）中身はそのままに <b>管理番号.json</b> へ付け直します。</span><br>')
+          : "")
       + '<b>残す</b>を選んだファイルの中身を <b>管理番号.json</b> という名前で書き直し、同じ組の他のファイルは削除します。'
       + '<span style="color:#c62828;font-weight:600;">削除したファイルは元に戻せません。</span><br>'
-      + '<span style="color:#555;">※ 既定では「ファイルの中に記録された更新日時（中の更新）」がいちばん新しいものを選んでいます。'
-      + 'サイズは写真が大半のため、少しの違いではKB表示が変わりません。</span></div>';
+      + '<span style="color:#555;">※ 既定では<b>中身がいちばん多いもの</b>を選んでいます'
+      + '（写真の枚数 → ファイルの大きさ → 中の更新日時 の順に見ます）。'
+      + '<b>いちばん新しいものではありません。</b>スマホの保存は失敗すると小さいファイル・空のファイルが'
+      + 'あとから作られるため、新しい方を残すと写真の入ったファイルを消してしまうことがあるためです。'
+      + '大きさはバイト数も添えてあるので、近い大きさでも見分けられます。</span></div>';
     groups.forEach((g, gi) => {
       html += '<div class="dup-grp"><div class="dup-grp-h">📄 ' + escapeHtml(g.no)
         + (g.dirPath ? ' <span style="color:#777;font-weight:400;">（' + escapeHtml(g.dirPath) + '）</span>' : '')
@@ -14168,28 +14192,46 @@ async function listSelectFolder(){
         }
       }
     }
-    // 中身が空（0KB）のファイルがあれば掃除を提案する（Androidで増える「管理番号_長い数字.json」）
+    // 読めなかったファイルの知らせ。戸別が丸ごと一覧から抜けるので、黙って飛ばさない。
+    // （スマホの保存が途中で切れると「管理番号_長い数字.json」が0KBで残る。
+    //   その管理番号のファイルが全部読めないと、その戸別は一覧に出ない＝消えたように見える）
+    let junkNote = "";
     {
-      const jf = junkClassify(stats.badFiles, rows);
+      let jf = junkClassify(stats.badFiles, rows);
+      // いちばん困るのは「読めるファイルが1つも無い管理番号」。ここは必ず知らせる。
+      if(jf.lostNos.length){
+        alert("⚠ 読み込めなかった戸別が " + jf.lostNos.length + " 件あります。\n\n"
+          + jf.lostNos.slice(0, 20).join("・") + (jf.lostNos.length > 20 ? "　ほか" : "") + "\n\n"
+          + "この管理番号のファイルは中身が空（0KB）か壊れているため、一覧に出ません。\n"
+          + "スマホの現場入力でその戸別を開き、「保存」し直してください（下書きが残っていれば中身は無事です）。");
+      }
       if(jf.empty.length && confirm("中身が空（0KB）のファイルが " + jf.empty.length + " 件見つかりました。\n"
-          + "（スマホで同じ戸別を保存し直すと増えることがあります）\n"
-          + (jf.lostNos.length
-              ? ("\nこのうち " + jf.lostNos.length + " 件の管理番号は、読めるファイルが1つもありません。\nそのぶん一覧から抜けています。\n")
-              : "")
-          + "\n中身を確かめてから掃除しますか？")){
+          + "（スマホで同じ戸別を保存し直すと増えることがあります）\n\n"
+          + "中身を確かめてから掃除しますか？")){
         const gone = await junkCleanupFlow(stats.badFiles, rows, true);
         if(gone && gone.length){
           expectedGone = expectedGone.concat(gone);   // 自分が消したぶんは「消えた」と数えない
           rows.length = 0;
           stats.errDirs = []; stats.skippedPaths = []; stats.badFiles = [];
           await scanDirRecursive(dirHandle, "", rows, stats);
+          jf = junkClassify(stats.badFiles, rows);
         }
+      }
+      const nBad = jf.empty.length + jf.broken.length;
+      if(nBad){
+        junkNote = "読めないファイル " + nBad + " 件"
+          + (jf.empty.length ? ("（空 " + jf.empty.length + " 件"
+              + (jf.broken.length ? ("・壊れ " + jf.broken.length + " 件") : "") + "）") : "")
+          + (jf.lostNos.length ? ("／読み込めなかった戸別 " + jf.lostNos.length + " 件："
+              + jf.lostNos.slice(0, 8).join("・") + (jf.lostNos.length > 8 ? " ほか" : "")) : "")
+          + "　※「🧹 空ファイルを掃除」で確認できます";
       }
     }
     // 台帳起点の行（仮受付・手入力）は保持し、管理番号重複は件ごとに確認してマージ
     _listRows = await mergeRowsWithManual(rows, { source: "folder", stats,
       root: dirHandle.name || "", expectedGone });
     _listSelectedFolderName = dirHandle.name || "";
+    if(junkNote) _missLastNote = (_missLastNote ? (_missLastNote + " ／ ") : "") + junkNote;
     renderListTable();
     missShowNote();
     // 物件へ取り込み：写真サムネイル生成→即時保存（IndexedDB＋共有ファイル連動時はファイルへも）
