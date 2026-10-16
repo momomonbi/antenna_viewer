@@ -7139,7 +7139,7 @@ async function lsRestoreFromIdb(){
 const APP_NAME_SHORT = "メイン";
 /* 版は「増えていくだけの通し番号」。日付だと新旧が分かりにくいため。
    現場入力アプリと同じ番号体系で、番号が小さいほうが古い。 */
-const APP_VERSION = "178";
+const APP_VERSION = "179";
 /* ============================================================
    ★日時の表示は、必ずこの端末の時刻で★
    保存している日時は世界時のISO文字列（…T01:03:00.000Z）。これを文字のまま
@@ -22933,12 +22933,8 @@ async function aptMgMovePhotos(target, stray){
       back = await writeUnion(sfh, sj, sText, [{ photos: own, thumb: !!((target.data || {}).chosho_photos_thumb) }]);
     }
     target._dir = stray._dir; target._name = stray._name; target._dirPath = stray._dirPath || "";
-    target._size = stray._size; target.fileHandle = stray.fileHandle; target.file = stray.file;
-    target._slim = true; target._photoCount = stray._photoCount; target._photosKnown = false;
-    /* 物件の縮小版は作り直す（版178）。行が持っていた写真は行に残る（常駐させない行の「行にだけある写真」）ので、
-       ファイルの写真と合わせて作る（ensureRowThumbs）。作り直さないと、物件にこの世帯が行の写真だけで入り、
-       持たせたファイルの写真が物件から消えていた */
-    target._thumbs = undefined;
+    target._size = stray._size; target.fileHandle = stray.fileHandle || sfh; target.file = stray.file;
+    settle(back, false);
     target._manual = false; delete target._detached;
     target._lgEdited = true; try { lgMarkTouched(target); } catch(_){}
     return { moved: n, note: "元のファイル " + stray._name + " を " + tmg + " の持ち物にしました（「💾 戸別ファイルへ反映」で名前が付け替わります）"
